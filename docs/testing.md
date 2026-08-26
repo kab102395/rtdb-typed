@@ -54,13 +54,14 @@ The repeatable local command is:
 ./scripts/test-emulator.sh
 ```
 
-That command runs the smoke test and the standard stress profile: 32 concurrent
+That command runs the smoke test and the standard CRUD profile: 32 concurrent
 workers perform 50 typed PUT/GET/PATCH/GET/POST sequences each, plus typed
-key-range and limit queries. The test verifies typed responses, collection
-cardinality, elapsed time, and cleanup. The 64-worker/100-sequence profile is
-available by invoking `emulator_stress_high_profile_manual` directly. These are
-functional concurrency stress tests, not production capacity benchmarks; they
-do not claim latency or maximum-throughput limits.
+key-range and limit queries. It also runs the realtime profile: 24 streams
+perform 40 alternating PUT/PATCH mutations each, plus filtered-child and
+32-subscriber fanout contracts. The 64-stream/100-mutation realtime profile
+is available by invoking `emulator_realtime_multipath_profile_manual`
+directly. These are functional concurrency stress tests, not production
+capacity benchmarks; they do not claim latency or maximum-throughput limits.
 
 The Realtime Database emulator defaults to `127.0.0.1:9000`; the Emulator Suite UI defaults to `127.0.0.1:4000`.
 

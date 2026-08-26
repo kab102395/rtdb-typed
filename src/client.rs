@@ -17,23 +17,95 @@ pub struct TypedClient {
 
 /// A result from a Firebase realtime stream.
 ///
-/// `Put` is deserialized into the complete model `T`. `Patch` intentionally
-/// remains raw JSON because Firebase sends only changed fields for patches.
+/// `Put` contains the complete model when the node exists, and `None` when
+/// Firebase reports a deletion/null value. `Patch` contains only changed
+/// fields through [`TypedPatch`]; it is never deserialized as a complete `T`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedEvent<T> {
     Put {
         path: String,
-        data: T,
+        data: Option<T>,
     },
-    /// A partial Firebase update. The payload is intentionally raw JSON
-    /// because omitted fields are valid and cannot be deserialized as a full
-    /// `T` without inventing application state.
+    /// A partial Firebase update.
     Patch {
         path: String,
-        data: Value,
+        patch: TypedPatch,
     },
     KeepAlive,
     Cancel,
+}
+
+/// A partial Firebase update that preserves the changed JSON object.
+///
+/// Patch fields are optional by definition: an omitted field was not changed,
+/// and must not be treated as a default value. Use [`Self::deserialize_field`]
+/// to decode only fields that are present, or [`Self::apply_to`] to merge the
+/// update into an existing Serde model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedPatch(Value);
+
+impl TypedPatch {
+    fn from_value(value: Value) -> Result<Self, TypedError> {
+        if value.is_object() {
+            Ok(Self(value))
+        } else {
+            Err(TypedError::InvalidPatch)
+        }
+    }
+
+    /// Return the original patch JSON object.
+    pub fn as_value(&self) -> &Value {
+        &self.0
+    }
+
+    /// Return whether the patch changes `field`.
+    pub fn contains_key(&self, field: &str) -> bool {
+        self.0
+            .as_object()
+            .is_some_and(|object| object.contains_key(field))
+    }
+
+    /// Return the raw changed value for `field`, if present.
+    pub fn get(&self, field: &str) -> Option<&Value> {
+        self.0.as_object().and_then(|object| object.get(field))
+    }
+
+    /// Iterate over changed field names.
+    pub fn keys(&self) -> impl Iterator<Item = &str> {
+        self.0
+            .as_object()
+            .into_iter()
+            .flat_map(|object| object.keys().map(String::as_str))
+    }
+
+    /// Deserialize one changed field. Missing fields return `None`.
+    pub fn deserialize_field<T>(&self, field: &str) -> Result<Option<T>, TypedError>
+    where
+        T: DeserializeOwned,
+    {
+        self.get(field)
+            .map(|value| Ok(serde_json::from_value(value.clone())?))
+            .transpose()
+    }
+
+    /// Apply this shallow patch to an existing JSON object.
+    pub fn apply_to_value(&self, target: &mut Value) -> Result<(), TypedError> {
+        let target = target.as_object_mut().ok_or(TypedError::InvalidPatch)?;
+        for (key, value) in self.0.as_object().expect("validated patch object") {
+            target.insert(key.clone(), value.clone());
+        }
+        Ok(())
+    }
+
+    /// Apply this patch to an existing Serde model and decode the result.
+    pub fn apply_to<T>(&self, current: &T) -> Result<T, TypedError>
+    where
+        T: Serialize + DeserializeOwned,
+    {
+        let mut value = serde_json::to_value(current)?;
+        self.apply_to_value(&mut value)?;
+        Ok(serde_json::from_value(value)?)
+    }
 }
 
 /// A Firebase object-map collection with a stable typed API.
@@ -217,22 +289,7 @@ where
         self,
     ) -> Result<impl futures_util::Stream<Item = Result<TypedEvent<T>, TypedError>>, TypedError>
     {
-        let stream = self.inner.stream().await?;
-        Ok(futures_util::StreamExt::map(stream, |event| {
-            event
-                .map_err(TypedError::from)
-                .and_then(|event| match event {
-                    rtdb_rs::RtdbEvent::Put { path, data } => Ok(TypedEvent::Put {
-                        path,
-                        data: serde_json::from_value(data)?,
-                    }),
-                    rtdb_rs::RtdbEvent::Patch { path, data } => {
-                        Ok(TypedEvent::Patch { path, data })
-                    }
-                    rtdb_rs::RtdbEvent::KeepAlive => Ok(TypedEvent::KeepAlive),
-                    rtdb_rs::RtdbEvent::Cancel => Ok(TypedEvent::Cancel),
-                })
-        }))
+        Ok(convert_stream(self.inner.stream().await?))
     }
 }
 
@@ -259,6 +316,17 @@ impl TypedClient {
         T: DeserializeOwned + 'static,
     {
         TypedQuery::new(self.inner.query(path))
+    }
+
+    /// Open a typed realtime stream at `path`.
+    pub async fn stream<T>(
+        &self,
+        path: &str,
+    ) -> Result<impl futures_util::Stream<Item = Result<TypedEvent<T>, TypedError>>, TypedError>
+    where
+        T: DeserializeOwned + 'static,
+    {
+        Ok(convert_stream(self.inner.stream(path).await?))
     }
 
     /// Read a Firebase object map as typed `(key, value)` entries.
@@ -371,6 +439,43 @@ where
     }
 }
 
+fn convert_event<T>(event: rtdb_rs::RtdbEvent) -> Result<TypedEvent<T>, TypedError>
+where
+    T: DeserializeOwned,
+{
+    match event {
+        rtdb_rs::RtdbEvent::Put { path, data } => Ok(TypedEvent::Put {
+            path,
+            data: decode_optional(data)?,
+        }),
+        rtdb_rs::RtdbEvent::Patch { path, data } => Ok(TypedEvent::Patch {
+            path,
+            patch: TypedPatch::from_value(data)?,
+        }),
+        rtdb_rs::RtdbEvent::KeepAlive => Ok(TypedEvent::KeepAlive),
+        rtdb_rs::RtdbEvent::Cancel => Ok(TypedEvent::Cancel),
+    }
+}
+
+fn convert_stream<T, S>(
+    stream: S,
+) -> impl futures_util::Stream<Item = Result<TypedEvent<T>, TypedError>>
+where
+    T: DeserializeOwned,
+    S: futures_util::Stream<Item = Result<rtdb_rs::RtdbEvent, rtdb_rs::RtdbError>>,
+{
+    futures_util::StreamExt::scan(stream, false, |cancelled, event| {
+        if *cancelled {
+            return futures_util::future::ready(None);
+        }
+        let converted = event.map_err(TypedError::from).and_then(convert_event);
+        if matches!(converted, Ok(TypedEvent::Cancel)) {
+            *cancelled = true;
+        }
+        futures_util::future::ready(Some(converted))
+    })
+}
+
 fn format_push_path(parent: &str, key: &str) -> String {
     let parent = parent.trim_matches('/');
     if parent.is_empty() {
@@ -382,7 +487,8 @@ fn format_push_path(parent: &str, key: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_optional, format_push_path, FirebaseCollection};
+    use super::{convert_event, decode_optional, format_push_path, FirebaseCollection, TypedEvent};
+    use crate::TypedError;
     use serde::{Deserialize, Serialize};
     use serde_json::json;
     use std::collections::HashMap;
@@ -488,5 +594,64 @@ mod tests {
             "tags": []
         }))
         .is_err());
+    }
+
+    #[test]
+    fn event_conversion_preserves_complete_null_partial_and_control_events() {
+        let put = convert_event::<User>(rtdb_rs::RtdbEvent::Put {
+            path: "/users/alice".into(),
+            data: json!({"name": "Alice", "score": 95}),
+        })
+        .unwrap();
+        assert!(matches!(
+            put,
+            TypedEvent::Put {
+                data: Some(User { score: 95, .. }),
+                ..
+            }
+        ));
+
+        let null_put = convert_event::<User>(rtdb_rs::RtdbEvent::Put {
+            path: "/users/alice".into(),
+            data: serde_json::Value::Null,
+        })
+        .unwrap();
+        assert!(matches!(null_put, TypedEvent::Put { data: None, .. }));
+
+        let patch = convert_event::<User>(rtdb_rs::RtdbEvent::Patch {
+            path: "/users/alice".into(),
+            data: json!({"profile": {"score": 100}, "score": 100}),
+        })
+        .unwrap();
+        let TypedEvent::Patch { patch, .. } = patch else {
+            panic!("expected patch")
+        };
+        assert!(patch.contains_key("profile"));
+        assert_eq!(patch.keys().collect::<Vec<_>>(), vec!["profile", "score"]);
+        assert_eq!(patch.deserialize_field::<u32>("score").unwrap(), Some(100));
+        assert_eq!(patch.deserialize_field::<u32>("missing").unwrap(), None);
+        let mut current = User {
+            name: "Alice".into(),
+            score: 95,
+        };
+        current = patch.apply_to(&current).unwrap();
+        assert_eq!(current.score, 100);
+        assert_eq!(patch.as_value()["profile"]["score"], 100);
+
+        assert!(matches!(
+            convert_event::<User>(rtdb_rs::RtdbEvent::Patch {
+                path: "/".into(),
+                data: json!(42),
+            }),
+            Err(TypedError::InvalidPatch)
+        ));
+        assert!(matches!(
+            convert_event::<User>(rtdb_rs::RtdbEvent::KeepAlive).unwrap(),
+            TypedEvent::KeepAlive
+        ));
+        assert!(matches!(
+            convert_event::<User>(rtdb_rs::RtdbEvent::Cancel).unwrap(),
+            TypedEvent::Cancel
+        ));
     }
 }

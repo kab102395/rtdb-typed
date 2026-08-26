@@ -30,6 +30,27 @@ async fn server_matching(response: &'static str, expected: &'static str) -> Stri
     format!("http://{address}")
 }
 
+async fn chunked_sse_server(chunks: &'static [&'static str]) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4096];
+        let size = socket.read(&mut request).await.unwrap();
+        let request = String::from_utf8_lossy(&request[..size]);
+        assert!(
+            request.contains("auth=test-token"),
+            "request was: {request}"
+        );
+        for chunk in chunks {
+            socket.write_all(chunk.as_bytes()).await.unwrap();
+            socket.flush().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    });
+    format!("http://{address}")
+}
+
 #[tokio::test]
 async fn crud_boundary_decodes_typed_values_and_push_keys() {
     let base = server("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 27\r\n\r\n{\"name\":\"Alice\",\"score\":95}").await;
@@ -274,12 +295,14 @@ async fn sse_put_patch_keepalive_and_cancel_are_projected_correctly() {
     assert!(matches!(
         put,
         TypedEvent::Put {
-            data: User { score: 95, .. },
+            data: Some(User { score: 95, .. }),
             ..
         }
     ));
     let patch = stream.next().await.unwrap().unwrap();
-    assert!(matches!(patch, TypedEvent::Patch { data, .. } if data == json!({"score": 100})));
+    assert!(
+        matches!(patch, TypedEvent::Patch { patch, .. } if patch.as_value() == &json!({"score": 100}))
+    );
     assert!(matches!(
         stream.next().await.unwrap().unwrap(),
         TypedEvent::KeepAlive
@@ -288,6 +311,7 @@ async fn sse_put_patch_keepalive_and_cancel_are_projected_correctly() {
         stream.next().await.unwrap().unwrap(),
         TypedEvent::Cancel
     ));
+    assert!(stream.next().await.is_none());
 }
 
 #[tokio::test]
@@ -321,4 +345,38 @@ async fn sse_malformed_payload_and_typed_put_failure_are_errors() {
         stream.next().await.unwrap(),
         Err(TypedError::Serde(_))
     ));
+}
+
+#[tokio::test]
+async fn sse_preserves_events_across_chunk_boundaries_and_crlf() {
+    let base = chunked_sse_server(&[
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\nevent: put\r\ndata: {\"path\":\"/\",\"data\":{\"name\":\"Alice\",",
+        "\"score\":95}}\r\n\r\nevent: patch\r\ndata: {\"path\":\"/\",\"data\":{\"score\":100}}\r\n\r\nevent: keep-alive\r\n\r\n",
+        "event: cancel\r\n\r\n",
+    ])
+    .await;
+    let stream = client_from(base)
+        .stream::<User>("users/alice")
+        .await
+        .unwrap();
+    tokio::pin!(stream);
+    assert!(matches!(
+        stream.next().await.unwrap().unwrap(),
+        TypedEvent::Put {
+            data: Some(User { score: 95, .. }),
+            ..
+        }
+    ));
+    assert!(
+        matches!(stream.next().await.unwrap().unwrap(), TypedEvent::Patch { patch, .. } if patch.as_value() == &json!({"score": 100}))
+    );
+    assert!(matches!(
+        stream.next().await.unwrap().unwrap(),
+        TypedEvent::KeepAlive
+    ));
+    assert!(matches!(
+        stream.next().await.unwrap().unwrap(),
+        TypedEvent::Cancel
+    ));
+    assert!(stream.next().await.is_none());
 }

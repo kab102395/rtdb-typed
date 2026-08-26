@@ -10,4 +10,7 @@ pub enum TypedError {
 
     #[error("Firebase POST response did not contain a push key")]
     MissingPushKey,
+
+    #[error("Firebase PATCH payload must be a JSON object")]
+    InvalidPatch,
 }

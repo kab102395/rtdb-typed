@@ -18,8 +18,17 @@ async fn main() -> Result<(), rtdb_typed::TypedError> {
     tokio::pin!(stream);
     while let Some(event) = stream.next().await {
         match event? {
-            TypedEvent::Put { data, .. } => println!("full user: {} ({})", data.name, data.score),
-            TypedEvent::Patch { data, .. } => println!("partial update: {data}"),
+            TypedEvent::Put {
+                data: Some(data), ..
+            } => {
+                println!("full user: {} ({})", data.name, data.score)
+            }
+            TypedEvent::Put { data: None, .. } => println!("user deleted"),
+            TypedEvent::Patch { patch, .. } => {
+                if let Some(score) = patch.deserialize_field::<u32>("score")? {
+                    println!("partial score update: {score}");
+                }
+            }
             TypedEvent::KeepAlive => {}
             TypedEvent::Cancel => break,
         }

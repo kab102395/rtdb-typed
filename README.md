@@ -34,9 +34,21 @@ Collection methods return `FirebaseCollection<T>`, which provides typed
 Firebase `null` to an empty collection; optional variants return `None` for
 `null`. Push writes return `PushResult { key, path }`.
 
-`TypedEvent::Put` contains a complete typed `T`. `TypedEvent::Patch` contains
-raw `serde_json::Value` because Firebase patch payloads are partial updates and
-cannot safely be deserialized as a complete model.
+`TypedEvent::Put` contains `Some(T)` for a complete value and `None` for a
+Firebase deletion/null. `TypedEvent::Patch` contains `TypedPatch`, preserving
+only the changed fields; it is never deserialized as a complete model. A patch
+can inspect a field with `deserialize_field` or apply shallow changes to an
+existing model with `apply_to`. Use `TypedClient::stream` for a direct stream,
+or `TypedClient::query(...).stream()` for filtered streams; `Cancel` is
+preserved and terminates the typed stream after delivery.
+
+### 0.3 migration note
+
+The provisional 0.1/0.2 realtime shape is replaced in 0.3: `Put` now carries
+`Option<T>` (`None` means Firebase `null`), and `Patch` now carries
+`TypedPatch` rather than pretending changed fields form a complete `T`.
+Consumers should explicitly apply patches to their current model and handle
+deletion before continuing synchronization.
 
 ## Testing strategy
 
@@ -77,9 +89,11 @@ without any Firebase account or production resource.
 - typed optional and collection query results
 - query error tests
 
-### Phase 3 — typed realtime streams (implemented locally)
+### Phase 3 — first-class typed realtime streams (implemented)
 
-- map `RtdbEvent::Put` and `RtdbEvent::Patch` JSON payloads into typed values
+- map `RtdbEvent::Put` and `RtdbEvent::Patch` JSON payloads into typed events
+- represent deletion as `TypedEvent::Put { data: None }`
+- inspect/apply partial updates with `TypedPatch`
 - preserve `KeepAlive` and `Cancel`
 - test SSE parsing through a local mock server
 

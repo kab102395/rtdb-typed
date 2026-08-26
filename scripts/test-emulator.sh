@@ -21,7 +21,7 @@ if docker ps --format '{{.Ports}}' | grep -Eq '(^|[^0-9])(9000|4000)->'; then
   exit 2
 fi
 
-for port in 9000 4000; do
+for port in 9000 4000 4400 4500; do
   if (command -v ss >/dev/null && ss -ltn | awk '{print $4}' | grep -Eq ":${port}$") || \
      (command -v lsof >/dev/null && lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1); then
     echo "Refusing to start Firebase: host port $port is already listening" >&2
@@ -38,4 +38,4 @@ echo "Starting Firebase Realtime Database emulator for $project_id on 127.0.0.1:
 npx --yes firebase-tools emulators:exec \
   --only database \
   --project "$project_id" \
-  "cargo test --test emulator -- --ignored --skip emulator_stress_high_profile_manual"
+  "cargo test --test emulator -- --ignored --skip emulator_stress_high_profile_manual && cargo test --test emulator_realtime -- --ignored --skip emulator_realtime_multipath_profile_manual"

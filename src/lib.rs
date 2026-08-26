@@ -15,7 +15,7 @@
 mod client;
 mod error;
 
-pub use client::{FirebaseCollection, PushResult, TypedClient, TypedEvent, TypedQuery};
+pub use client::{FirebaseCollection, PushResult, TypedClient, TypedEvent, TypedPatch, TypedQuery};
 pub use error::TypedError;
 
 pub use rtdb_rs;
