@@ -38,4 +38,4 @@ echo "Starting Firebase Realtime Database emulator for $project_id on 127.0.0.1:
 npx --yes firebase-tools emulators:exec \
   --only database \
   --project "$project_id" \
-  "cargo test --test emulator -- --ignored"
+  "cargo test --test emulator -- --ignored --skip emulator_stress_high_profile_manual"

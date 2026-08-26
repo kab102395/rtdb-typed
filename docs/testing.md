@@ -54,15 +54,17 @@ The repeatable local command is:
 ./scripts/test-emulator.sh
 ```
 
-That command runs the ignored emulator tests, including the stress case: 16
-concurrent workers perform 25 typed PUT/GET/PATCH/GET/POST cycles each, then
-the test verifies the complete typed collection and cleans up its run-specific
-root. This is a functional concurrency stress test, not a production capacity
-benchmark; it does not claim latency or maximum-throughput limits.
+That command runs the smoke test and the standard stress profile: 32 concurrent
+workers perform 50 typed PUT/GET/PATCH/GET/POST sequences each, plus typed
+key-range and limit queries. The test verifies typed responses, collection
+cardinality, elapsed time, and cleanup. The 64-worker/100-sequence profile is
+available by invoking `emulator_stress_high_profile_manual` directly. These are
+functional concurrency stress tests, not production capacity benchmarks; they
+do not claim latency or maximum-throughput limits.
 
 The Realtime Database emulator defaults to `127.0.0.1:9000`; the Emulator Suite UI defaults to `127.0.0.1:4000`.
 
-## Important current upstream constraint
+## Namespace and query behavior
 
 The RTDB emulator REST API identifies a database instance with the `ns` query parameter, for example:
 
@@ -70,13 +72,11 @@ The RTDB emulator REST API identifies a database instance with the `ns` query pa
 http://127.0.0.1:9000/users/alice.json?ns=demo-rtdb-typed
 ```
 
-`rtdb-rs 0.3.1` owns URL construction and currently appends its own authentication query parameter. Before emulator-backed tests are considered reliable, `rtdb-rs` should gain an explicit, general way to preserve/add emulator namespace query parameters (or a dedicated emulator constructor).
-
-Until that upstream capability exists and is verified, Layer 1 and Layer 2
-should be the normal typed-client realtime-stream test path. The current
-emulator tests verify typed CRUD against the local default namespace, while
-the typed SSE adapter remains blocked on `rtdb-rs` namespace support. Do not
-point automated tests at a real Firebase RTDB instance as a workaround.
+The checked-in emulator runner uses the `demo-rtdb-typed` namespace and
+instance-specific rules. `singleProjectMode` is disabled because the suite
+also creates isolated mock-server namespaces. Firebase keys are indexed
+automatically; child-field filter coverage is deterministic in the localhost
+contract tests. Do not point automated tests at a real Firebase RTDB instance.
 
 ## Emulator security rules
 
@@ -101,5 +101,5 @@ Before publishing a release:
 2. `cargo clippy --all-targets --all-features -- -D warnings`
 3. `cargo test`
 4. local HTTP contract tests
-5. emulator integration tests once namespace support is available
-6. `cargo package --allow-dirty` or equivalent package verification
+5. `./scripts/test-emulator.sh`
+6. `cargo package --list`, `cargo package`, and `cargo publish --dry-run`

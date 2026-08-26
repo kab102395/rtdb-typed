@@ -4,7 +4,6 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 struct User {
     name: String,
-    active: bool,
 }
 
 #[tokio::main]
@@ -13,15 +12,10 @@ async fn main() -> Result<(), rtdb_typed::TypedError> {
         std::env::var("RTDB_URL").expect("RTDB_URL must be set"),
         std::env::var("RTDB_TOKEN").unwrap_or_default(),
     );
-    let users: FirebaseCollection<User> = client
-        .query("users")
-        .order_by_child("active")
-        .equal_to(rtdb_typed::rtdb_rs::FilterValue::boolean(true))
-        .limit_to_first(25)
-        .send_collection()
-        .await?;
-    for (key, user) in users {
-        println!("{key}: {} ({})", user.name, user.active);
+    let users: FirebaseCollection<User> = client.get_collection("users").await?;
+    println!("{} users", users.len());
+    if let Some(user) = users.get("alice") {
+        println!("Alice is {}", user.name);
     }
     Ok(())
 }

@@ -22,8 +22,17 @@ The initial `0.1.x` line will focus on a narrow typed wrapper:
 - `TypedClient::post<T>()`
 - `TypedClient::delete()`
 - `TypedClient::get_collection<T>()`
+- `TypedClient::get_optional_collection<T>()`
 - `TypedClient::query<T>().send()` for typed query results
+- `TypedClient::query<T>().send_optional()` for nullable query results
+- `TypedClient::query<T>().send_collection()` for typed Firebase object maps
 - `TypedClient::query<T>().stream()` for typed SSE events
+
+Collection methods return `FirebaseCollection<T>`, which provides typed
+`len`, `is_empty`, `get`, `contains_key`, `keys`, `values`, `iter`, and
+`into_inner` operations. `get_collection` and `send_collection` convert
+Firebase `null` to an empty collection; optional variants return `None` for
+`null`. Push writes return `PushResult { key, path }`.
 
 `TypedEvent::Put` contains a complete typed `T`. `TypedEvent::Patch` contains
 raw `serde_json::Value` because Firebase patch payloads are partial updates and
@@ -60,11 +69,12 @@ The local emulator smoke path is also implemented in `tests/emulator.rs` and
 is run by `scripts/test-emulator.sh`. It verifies the emulator plus typed CRUD
 without any Firebase account or production resource.
 
-### Phase 2 — typed queries (implemented)
+### Phase 2 — typed queries and collections (implemented)
 
 - typed wrapper around `rtdb_rs::GetBuilder`
 - `send<T>()`
-- collection helpers for Firebase key/value maps
+- `FirebaseCollection<T>` helpers for Firebase key/value maps
+- typed optional and collection query results
 - query error tests
 
 ### Phase 3 — typed realtime streams (implemented locally)
@@ -82,9 +92,9 @@ without any Firebase account or production resource.
 
 ## Status
 
-The `0.1.0` foundation is implemented. Query/stream adapters are available;
-the remaining compatibility work is teaching `rtdb-rs` to preserve the
-emulator `ns` query parameter for fully namespace-explicit emulator tests.
+The `0.2.0` typed collection/query API and local emulator stress suite are
+implemented. Query/stream adapters are available; the independent upstream
+`rtdb-rs` namespace release remains tracked in the first-class companion plan.
 
 ## License
 

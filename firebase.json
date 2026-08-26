@@ -1,7 +1,10 @@
 {
-  "database": {
-    "rules": "database.rules.json"
-  },
+  "database": [
+    {
+      "instance": "demo-rtdb-typed",
+      "rules": "database.rules.json"
+    }
+  ],
   "emulators": {
     "database": {
       "host": "127.0.0.1",
@@ -12,6 +15,6 @@
       "host": "127.0.0.1",
       "port": 4000
     },
-    "singleProjectMode": true
+    "singleProjectMode": false
   }
 }

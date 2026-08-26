@@ -3,11 +3,10 @@
 //! This remains ignored because it needs the Firebase CLI to start the
 //! emulator. Run it through `scripts/test-emulator.sh`, never a real project.
 
-use rtdb_typed::TypedClient;
+use rtdb_typed::{FirebaseCollection, TypedClient};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Health {
@@ -49,23 +48,37 @@ async fn emulator_is_local_and_responds() {
 
 #[tokio::test]
 #[ignore]
-async fn emulator_handles_concurrent_typed_crud_load() {
-    const WORKERS: u32 = 16;
-    const OPERATIONS_PER_WORKER: u32 = 25;
+async fn emulator_stress_standard_profile() {
+    run_stress_profile(32, 50).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore]
+async fn emulator_stress_high_profile_manual() {
+    run_stress_profile(64, 100).await.unwrap();
+}
+
+async fn run_stress_profile(
+    workers: u32,
+    operations_per_worker: u32,
+) -> Result<(), rtdb_typed::TypedError> {
+    let started = Instant::now();
     let run_id = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    let root = format!("stress/{run_id}");
+    let records_root = "stress_records".to_string();
+    let posts_root = format!("stress_posts/{run_id}");
     let client = Arc::new(TypedClient::from_parts("http://127.0.0.1:9000", ""));
 
     let mut tasks = Vec::new();
-    for worker in 0..WORKERS {
+    for worker in 0..workers {
         let client = Arc::clone(&client);
-        let root = root.clone();
+        let records_root = records_root.clone();
+        let posts_root = posts_root.clone();
         tasks.push(tokio::spawn(async move {
-            for sequence in 0..OPERATIONS_PER_WORKER {
-                let path = format!("{root}/records/{worker}-{sequence}");
+            for sequence in 0..operations_per_worker {
+                let path = format!("{records_root}/{run_id}-{worker}-{sequence}");
                 let record = Record {
                     worker,
                     sequence,
@@ -80,8 +93,36 @@ async fn emulator_handles_concurrent_typed_crud_load() {
                 let patched = client.get::<Record>(&path).await?;
                 assert!(!patched.active);
 
-                let key = client.post(&format!("{root}/posted"), &record).await?;
-                assert!(!key.is_empty());
+                let key = client.post(&posts_root, &record).await?;
+                assert!(!key.key.is_empty());
+
+                // Firebase indexes child keys automatically, so key ordering
+                // provides a deterministic indexed query for every run.
+                let by_key: FirebaseCollection<Record> = client
+                    .query(&records_root)
+                    .order_by_key()
+                    .start_at(rtdb_typed::rtdb_rs::FilterValue::string(format!(
+                        "{run_id}-"
+                    )))
+                    .send_collection()
+                    .await?;
+                assert!(by_key
+                    .values()
+                    .all(|item| item.sequence < operations_per_worker));
+
+                let bounded: FirebaseCollection<Record> = client
+                    .query(&records_root)
+                    .order_by_key()
+                    .start_at(rtdb_typed::rtdb_rs::FilterValue::string(format!(
+                        "{run_id}-"
+                    )))
+                    .end_at(rtdb_typed::rtdb_rs::FilterValue::string(format!(
+                        "{run_id}-~"
+                    )))
+                    .limit_to_first(5)
+                    .send_collection()
+                    .await?;
+                assert!(bounded.len() <= 5);
             }
             Ok::<(), rtdb_typed::TypedError>(())
         }));
@@ -93,12 +134,16 @@ async fn emulator_handles_concurrent_typed_crud_load() {
             .expect("stress request failed");
     }
 
-    let records: HashMap<String, Record> = client
-        .get_collection(&format!("{root}/records"))
-        .await
-        .unwrap();
-    assert_eq!(records.len(), (WORKERS * OPERATIONS_PER_WORKER) as usize);
+    let records: FirebaseCollection<Record> = client.get_collection(&records_root).await.unwrap();
+    assert_eq!(records.len(), (workers * operations_per_worker) as usize);
     assert!(records.values().all(|record| !record.active));
 
-    client.delete(&root).await.unwrap();
+    client.delete(&records_root).await.unwrap();
+    client.delete(&posts_root).await.unwrap();
+    println!(
+        "stress profile: workers={workers} sequences_per_worker={operations_per_worker} sequences={} elapsed_ms={}",
+        workers * operations_per_worker,
+        started.elapsed().as_millis()
+    );
+    Ok(())
 }

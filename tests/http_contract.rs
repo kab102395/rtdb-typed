@@ -1,5 +1,5 @@
 use futures_util::StreamExt;
-use rtdb_typed::{TypedClient, TypedError, TypedEvent};
+use rtdb_typed::{FirebaseCollection, PushResult, TypedClient, TypedError, TypedEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::time::Duration;
@@ -41,6 +41,17 @@ async fn crud_boundary_decodes_typed_values_and_push_keys() {
             score: 95
         }
     );
+
+    let base = server(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 17\r\n\r\n{\"name\":\"-Npush\"}",
+    )
+    .await;
+    let pushed: PushResult = client_from(base)
+        .post("/users", &json!({"name":"Alice"}))
+        .await
+        .unwrap();
+    assert_eq!(pushed.key, "-Npush");
+    assert_eq!(pushed.path.as_deref(), Some("/users/-Npush"));
 }
 
 #[tokio::test]
@@ -74,15 +85,15 @@ async fn query_filters_are_sent_and_decoded_into_a_collection() {
     )
     .await;
     let client = client_from(base);
-    let results: std::collections::HashMap<String, User> = client
+    let results: FirebaseCollection<User> = client
         .query("users")
         .order_by_child("active")
         .equal_to(rtdb_typed::rtdb_rs::FilterValue::boolean(true))
         .limit_to_first(2)
-        .send()
+        .send_collection()
         .await
         .unwrap();
-    assert_eq!(results["alice"].score, 95);
+    assert_eq!(results.get("alice").unwrap().score, 95);
 }
 
 #[tokio::test]
@@ -93,12 +104,12 @@ async fn query_range_and_key_ordering_are_supported() {
     )
     .await;
     let client = client_from(base);
-    let results: std::collections::HashMap<String, User> = client
+    let results: FirebaseCollection<User> = client
         .query("users")
         .order_by_key()
         .start_at(rtdb_typed::rtdb_rs::FilterValue::number(10.0))
         .end_at(rtdb_typed::rtdb_rs::FilterValue::number(20.0))
-        .send()
+        .send_collection()
         .await
         .unwrap();
     assert!(results.is_empty());
@@ -137,15 +148,14 @@ async fn collection_null_is_empty_but_optional_collection_preserves_missing() {
     )
     .await;
     let client = client_from(base);
-    let empty: std::collections::HashMap<String, User> =
-        client.get_collection("missing").await.unwrap();
+    let empty: FirebaseCollection<User> = client.get_collection("missing").await.unwrap();
     assert!(empty.is_empty());
 
     let base = server(
         "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 4\r\n\r\nnull",
     )
     .await;
-    let optional: Option<std::collections::HashMap<String, User>> = client_from(base)
+    let optional: Option<FirebaseCollection<User>> = client_from(base)
         .get_optional_collection("missing")
         .await
         .unwrap();
@@ -159,6 +169,34 @@ async fn collection_null_is_empty_but_optional_collection_preserves_missing() {
         client_from(base).get_collection::<User>("broken").await,
         Err(TypedError::Serde(_))
     ));
+}
+
+#[tokio::test]
+async fn query_optional_and_collection_null_semantics_are_explicit() {
+    let base = server(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 4\r\n\r\nnull",
+    )
+    .await;
+    let client = client_from(base);
+    assert_eq!(
+        client
+            .query::<User>("missing")
+            .send_optional()
+            .await
+            .unwrap(),
+        None
+    );
+
+    let base = server(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 4\r\n\r\nnull",
+    )
+    .await;
+    let collection = client_from(base)
+        .query::<User>("missing")
+        .send_collection()
+        .await
+        .unwrap();
+    assert!(collection.is_empty());
 }
 
 #[tokio::test]

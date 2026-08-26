@@ -17,7 +17,7 @@ async fn main() -> Result<(), rtdb_typed::TypedError> {
         "missing user: {}",
         user.map(|user| user.name).unwrap_or_else(|| "none".into())
     );
-    let _: Option<std::collections::HashMap<String, User>> =
+    let _: Option<rtdb_typed::FirebaseCollection<User>> =
         client.get_optional_collection("users/missing").await?;
     Ok(())
 }

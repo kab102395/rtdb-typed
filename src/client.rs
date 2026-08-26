@@ -36,6 +36,96 @@ pub enum TypedEvent<T> {
     Cancel,
 }
 
+/// A Firebase object-map collection with a stable typed API.
+///
+/// Firebase represents collections as JSON objects keyed by Firebase child
+/// keys. A missing collection is represented by JSON `null` and is converted
+/// to an empty collection by [`TypedClient::get_collection`] and
+/// [`TypedQuery::send_collection`]. Use the optional client method when the
+/// distinction between a missing and an empty collection matters.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FirebaseCollection<T>(HashMap<String, T>);
+
+impl<T> FirebaseCollection<T> {
+    /// Construct a collection from its Firebase key/value representation.
+    pub fn new(values: HashMap<String, T>) -> Self {
+        Self(values)
+    }
+
+    /// Return the number of children in the collection.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Return whether the collection contains no children.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Return a child by Firebase key.
+    pub fn get(&self, key: &str) -> Option<&T> {
+        self.0.get(key)
+    }
+
+    /// Return whether a Firebase child key exists.
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.0.contains_key(key)
+    }
+
+    /// Iterate over Firebase child keys.
+    pub fn keys(&self) -> std::collections::hash_map::Keys<'_, String, T> {
+        self.0.keys()
+    }
+
+    /// Iterate over collection values.
+    pub fn values(&self) -> std::collections::hash_map::Values<'_, String, T> {
+        self.0.values()
+    }
+
+    /// Iterate over `(key, value)` pairs.
+    pub fn iter(&self) -> std::collections::hash_map::Iter<'_, String, T> {
+        self.0.iter()
+    }
+
+    /// Consume the wrapper and return its key/value representation.
+    pub fn into_inner(self) -> HashMap<String, T> {
+        self.0
+    }
+}
+
+impl<T> From<HashMap<String, T>> for FirebaseCollection<T> {
+    fn from(values: HashMap<String, T>) -> Self {
+        Self::new(values)
+    }
+}
+
+impl<T> IntoIterator for FirebaseCollection<T> {
+    type Item = (String, T);
+    type IntoIter = std::collections::hash_map::IntoIter<String, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a FirebaseCollection<T> {
+    type Item = (&'a String, &'a T);
+    type IntoIter = std::collections::hash_map::Iter<'a, String, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+/// The stable result of creating a Firebase child with a push key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushResult {
+    /// The generated Firebase child key.
+    pub key: String,
+    /// The created child path, when it can be derived from the request path.
+    pub path: Option<String>,
+}
+
 /// A typed wrapper around [`rtdb_rs::GetBuilder`].
 pub struct TypedQuery<'a, T> {
     inner: rtdb_rs::GetBuilder<'a>,
@@ -107,6 +197,22 @@ where
         Ok(serde_json::from_value(self.inner.send().await?)?)
     }
 
+    /// Execute the query and decode JSON `null` as `None`.
+    pub async fn send_optional(self) -> Result<Option<T>, TypedError> {
+        decode_optional(self.inner.send().await?)
+    }
+
+    /// Execute the query as a Firebase object-map collection.
+    ///
+    /// JSON `null` is treated as an empty collection.
+    pub async fn send_collection(self) -> Result<FirebaseCollection<T>, TypedError> {
+        let value = self.inner.send().await?;
+        if value.is_null() {
+            return Ok(FirebaseCollection::new(HashMap::new()));
+        }
+        Ok(FirebaseCollection::new(serde_json::from_value(value)?))
+    }
+
     pub async fn stream(
         self,
     ) -> Result<impl futures_util::Stream<Item = Result<TypedEvent<T>, TypedError>>, TypedError>
@@ -159,18 +265,15 @@ impl TypedClient {
     ///
     /// A missing node (`null`) is treated as an empty map. Use
     /// [`Self::get_optional_collection`] when that distinction matters.
-    pub async fn get_collection<T>(
-        &self,
-        path: &str,
-    ) -> Result<std::collections::HashMap<String, T>, TypedError>
+    pub async fn get_collection<T>(&self, path: &str) -> Result<FirebaseCollection<T>, TypedError>
     where
         T: DeserializeOwned,
     {
         let value = self.inner.get(path).await?;
         if value.is_null() {
-            return Ok(HashMap::new());
+            return Ok(FirebaseCollection::new(HashMap::new()));
         }
-        Ok(serde_json::from_value(value)?)
+        Ok(FirebaseCollection::new(serde_json::from_value(value)?))
     }
 
     /// Read a Firebase object map while preserving whether the node was
@@ -178,7 +281,7 @@ impl TypedClient {
     pub async fn get_optional_collection<T>(
         &self,
         path: &str,
-    ) -> Result<Option<HashMap<String, T>>, TypedError>
+    ) -> Result<Option<FirebaseCollection<T>>, TypedError>
     where
         T: DeserializeOwned,
     {
@@ -231,19 +334,23 @@ impl TypedClient {
         Ok(serde_json::from_value(response)?)
     }
 
-    /// Append a child with a Firebase push key and return that generated key.
-    pub async fn post<T>(&self, path: &str, value: &T) -> Result<String, TypedError>
+    /// Append a child with a Firebase push key and return its stable result.
+    pub async fn post<T>(&self, path: &str, value: &T) -> Result<PushResult, TypedError>
     where
         T: Serialize + ?Sized,
     {
         let body = serde_json::to_value(value)?;
         let response = self.inner.post(path, &body).await?;
 
-        response
+        let key = response
             .get("name")
             .and_then(Value::as_str)
             .map(str::to_owned)
-            .ok_or(TypedError::MissingPushKey)
+            .ok_or(TypedError::MissingPushKey)?;
+        Ok(PushResult {
+            path: Some(format_push_path(path, &key)),
+            key,
+        })
     }
 
     /// Delete a node.
@@ -264,11 +371,21 @@ where
     }
 }
 
+fn format_push_path(parent: &str, key: &str) -> String {
+    let parent = parent.trim_matches('/');
+    if parent.is_empty() {
+        format!("/{key}")
+    } else {
+        format!("/{parent}/{key}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::decode_optional;
+    use super::{decode_optional, format_push_path, FirebaseCollection};
     use serde::{Deserialize, Serialize};
     use serde_json::json;
+    use std::collections::HashMap;
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct User {
@@ -297,5 +414,79 @@ mod tests {
                 score: 95,
             })
         );
+    }
+
+    #[test]
+    fn collection_deserializes_and_exposes_key_value_operations() {
+        let collection: FirebaseCollection<User> = serde_json::from_value(serde_json::json!({
+            "alice": {"name": "Alice", "score": 95},
+            "bob": {"name": "Bob", "score": 80}
+        }))
+        .unwrap();
+
+        assert_eq!(collection.len(), 2);
+        assert!(!collection.is_empty());
+        assert!(collection.contains_key("alice"));
+        assert_eq!(collection.get("alice").unwrap().score, 95);
+        assert_eq!(collection.keys().count(), 2);
+        assert_eq!(collection.values().count(), 2);
+        assert_eq!(collection.iter().count(), 2);
+        assert_eq!(collection.clone().into_inner().len(), 2);
+        assert_eq!(collection.into_iter().count(), 2);
+    }
+
+    #[test]
+    fn collection_supports_empty_and_malformed_shapes_explicitly() {
+        let empty: FirebaseCollection<User> =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(empty.is_empty());
+
+        let malformed = serde_json::from_value::<FirebaseCollection<User>>(serde_json::json!({
+            "alice": {"name": "Alice"}
+        }));
+        assert!(malformed.is_err());
+
+        let mut values = HashMap::new();
+        values.insert(
+            "alice".to_string(),
+            User {
+                name: "Alice".into(),
+                score: 95,
+            },
+        );
+        let from_map = FirebaseCollection::from(values);
+        assert!(from_map.contains_key("alice"));
+    }
+
+    #[test]
+    fn push_paths_are_derived_without_double_slashes() {
+        assert_eq!(format_push_path("users", "-Nkey"), "/users/-Nkey");
+        assert_eq!(format_push_path("/users/", "-Nkey"), "/users/-Nkey");
+        assert_eq!(format_push_path("/", "-Nkey"), "/-Nkey");
+    }
+
+    #[test]
+    fn representative_serde_values_round_trip() {
+        #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+        struct Profile {
+            enabled: bool,
+            tags: Vec<String>,
+            scores: HashMap<String, u32>,
+            nickname: Option<String>,
+        }
+
+        let profile = Profile {
+            enabled: true,
+            tags: vec!["rust".into(), "firebase".into()],
+            scores: HashMap::from([(String::from("first"), 1)]),
+            nickname: None,
+        };
+        let encoded = serde_json::to_value(&profile).unwrap();
+        assert_eq!(serde_json::from_value::<Profile>(encoded).unwrap(), profile);
+        assert!(serde_json::from_value::<Profile>(serde_json::json!({
+            "enabled": true,
+            "tags": []
+        }))
+        .is_err());
     }
 }
