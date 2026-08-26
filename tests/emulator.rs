@@ -44,6 +44,15 @@ async fn emulator_is_local_and_responds() {
     assert_eq!(health, Health { ok: true });
     assert_eq!(client.get::<Health>("typed-health").await.unwrap(), health);
     client.delete("typed-health").await.unwrap();
+    assert_eq!(
+        client.get_optional::<Health>("typed-health").await.unwrap(),
+        None
+    );
+    assert!(client
+        .get_collection::<Health>("typed-health/children")
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]
@@ -141,8 +150,9 @@ async fn run_stress_profile(
     client.delete(&records_root).await.unwrap();
     client.delete(&posts_root).await.unwrap();
     println!(
-        "stress profile: workers={workers} sequences_per_worker={operations_per_worker} sequences={} elapsed_ms={}",
+        "stress profile: workers={workers} sequences_per_worker={operations_per_worker} sequences={} mixed_operations={} elapsed_ms={}",
         workers * operations_per_worker,
+        workers * operations_per_worker * 7,
         started.elapsed().as_millis()
     );
     Ok(())

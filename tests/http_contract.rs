@@ -55,6 +55,47 @@ async fn crud_boundary_decodes_typed_values_and_push_keys() {
 }
 
 #[tokio::test]
+async fn write_delete_and_upstream_status_boundaries_are_typed() {
+    let response = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 27\r\n\r\n{\"name\":\"Alice\",\"score\":95}";
+    let client = client_from(server(response).await);
+    assert_eq!(
+        client
+            .put::<_, User>("users/alice", &json!({"name":"Alice","score":95}))
+            .await
+            .unwrap()
+            .name,
+        "Alice"
+    );
+
+    let client = client_from(server(response).await);
+    assert_eq!(
+        client
+            .patch::<_, User>("users/alice", &json!({"score":100}))
+            .await
+            .unwrap()
+            .score,
+        95
+    );
+
+    let client = client_from(
+        server(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 4\r\n\r\nnull",
+        )
+        .await,
+    );
+    client.delete("users/alice").await.unwrap();
+
+    let client = client_from(
+        server("HTTP/1.1 500 Internal Server Error\r\ncontent-type: application/json\r\ncontent-length: 5\r\n\r\nerror")
+            .await,
+    );
+    assert!(matches!(
+        client.get::<User>("users/alice").await,
+        Err(TypedError::Rtdb(_))
+    ));
+}
+
+#[tokio::test]
 async fn null_is_optional_and_missing_push_key_is_an_error() {
     let base = server(
         "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 4\r\n\r\nnull",
