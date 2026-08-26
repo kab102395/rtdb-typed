@@ -241,24 +241,24 @@ Not required for normal development or CI. If ever used before a significant rel
 
 ## 0.1.0 release checklist
 
-- [ ] PATCH event semantics corrected and documented.
-- [ ] Collection/null semantics finalized.
-- [ ] Typed CRUD unit and localhost contract tests complete.
-- [ ] Typed query localhost contract tests complete.
-- [ ] Typed SSE localhost contract tests complete.
+- [x] PATCH event semantics corrected and documented.
+- [x] Collection/null semantics finalized.
+- [x] Typed CRUD unit and localhost contract tests complete.
+- [x] Typed query localhost contract tests complete.
+- [x] Typed SSE localhost contract tests complete.
 - [ ] `rtdb-rs` emulator namespace support released and dependency bumped.
 - [ ] Namespace-explicit emulator CRUD test passes.
 - [ ] Namespace-explicit emulator query test passes.
 - [ ] Namespace-explicit emulator SSE test passes.
-- [ ] Public rustdoc complete with no warnings.
-- [ ] `examples/` compile in CI.
-- [ ] `CHANGELOG.md` added.
-- [ ] `CONTRIBUTING.md` added.
-- [ ] `SECURITY.md` added.
-- [ ] Cargo metadata finalized, including MSRV.
-- [ ] `cargo package --list` inspected.
-- [ ] `cargo package` passes.
-- [ ] `cargo publish --dry-run` passes.
+- [x] Public rustdoc complete with no warnings.
+- [x] `examples/` compile in CI.
+- [x] `CHANGELOG.md` added.
+- [x] `CONTRIBUTING.md` added.
+- [x] `SECURITY.md` added.
+- [x] Cargo metadata finalized, including MSRV.
+- [x] `cargo package --list` inspected.
+- [x] `cargo package` passes.
+- [x] `cargo publish --dry-run` passes.
 - [ ] CI green on the exact release commit.
 - [ ] README examples match the exact `0.1.0` API.
 - [ ] Tag `v0.1.0` only after crates.io publication succeeds.

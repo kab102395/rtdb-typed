@@ -24,3 +24,12 @@ jobs:
 
       - name: Test
         run: cargo test --all-targets --all-features
+
+      - name: Documentation
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+
+      - name: Examples
+        run: cargo check --examples
+
+      - name: Package
+        run: cargo package --list

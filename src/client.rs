@@ -1,6 +1,7 @@
 use rtdb_rs::RtdbClient;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use crate::TypedError;
@@ -14,11 +15,23 @@ pub struct TypedClient {
     inner: RtdbClient,
 }
 
-/// A typed result from a Firebase realtime stream.
+/// A result from a Firebase realtime stream.
+///
+/// `Put` is deserialized into the complete model `T`. `Patch` intentionally
+/// remains raw JSON because Firebase sends only changed fields for patches.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedEvent<T> {
-    Put { path: String, data: T },
-    Patch { path: String, data: T },
+    Put {
+        path: String,
+        data: T,
+    },
+    /// A partial Firebase update. The payload is intentionally raw JSON
+    /// because omitted fields are valid and cannot be deserialized as a full
+    /// `T` without inventing application state.
+    Patch {
+        path: String,
+        data: Value,
+    },
     KeepAlive,
     Cancel,
 }
@@ -107,10 +120,9 @@ where
                         path,
                         data: serde_json::from_value(data)?,
                     }),
-                    rtdb_rs::RtdbEvent::Patch { path, data } => Ok(TypedEvent::Patch {
-                        path,
-                        data: serde_json::from_value(data)?,
-                    }),
+                    rtdb_rs::RtdbEvent::Patch { path, data } => {
+                        Ok(TypedEvent::Patch { path, data })
+                    }
                     rtdb_rs::RtdbEvent::KeepAlive => Ok(TypedEvent::KeepAlive),
                     rtdb_rs::RtdbEvent::Cancel => Ok(TypedEvent::Cancel),
                 })
@@ -144,6 +156,9 @@ impl TypedClient {
     }
 
     /// Read a Firebase object map as typed `(key, value)` entries.
+    ///
+    /// A missing node (`null`) is treated as an empty map. Use
+    /// [`Self::get_optional_collection`] when that distinction matters.
     pub async fn get_collection<T>(
         &self,
         path: &str,
@@ -151,7 +166,24 @@ impl TypedClient {
     where
         T: DeserializeOwned,
     {
-        self.get(path).await
+        let value = self.inner.get(path).await?;
+        if value.is_null() {
+            return Ok(HashMap::new());
+        }
+        Ok(serde_json::from_value(value)?)
+    }
+
+    /// Read a Firebase object map while preserving whether the node was
+    /// missing. A missing node is `None`; an existing empty object is `Some`.
+    pub async fn get_optional_collection<T>(
+        &self,
+        path: &str,
+    ) -> Result<Option<HashMap<String, T>>, TypedError>
+    where
+        T: DeserializeOwned,
+    {
+        let value = self.inner.get(path).await?;
+        decode_optional(value)
     }
 
     /// Read and deserialize a value.

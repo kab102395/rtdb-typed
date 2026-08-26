@@ -25,6 +25,10 @@ The initial `0.1.x` line will focus on a narrow typed wrapper:
 - `TypedClient::query<T>().send()` for typed query results
 - `TypedClient::query<T>().stream()` for typed SSE events
 
+`TypedEvent::Put` contains a complete typed `T`. `TypedEvent::Patch` contains
+raw `serde_json::Value` because Firebase patch payloads are partial updates and
+cannot safely be deserialized as a complete model.
+
 ## Testing strategy
 
 ### 1. Unit tests — no network
@@ -56,14 +60,14 @@ The local emulator smoke path is also implemented in `tests/emulator.rs` and
 is run by `scripts/test-emulator.sh`. It verifies the emulator plus typed CRUD
 without any Firebase account or production resource.
 
-### Phase 2 — typed queries
+### Phase 2 — typed queries (implemented)
 
 - typed wrapper around `rtdb_rs::GetBuilder`
 - `send<T>()`
 - collection helpers for Firebase key/value maps
 - query error tests
 
-### Phase 3 — typed realtime streams
+### Phase 3 — typed realtime streams (implemented locally)
 
 - map `RtdbEvent::Put` and `RtdbEvent::Patch` JSON payloads into typed values
 - preserve `KeepAlive` and `Cancel`

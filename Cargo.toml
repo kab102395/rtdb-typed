@@ -2,6 +2,9 @@
 name = "rtdb-typed"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.85"
+readme = "README.md"
+documentation = "https://docs.rs/rtdb-typed"
 description = "Typed Serde data layer for Firebase Realtime Database, built on rtdb-rs"
 license = "MIT"
 repository = "https://github.com/kab102395/rtdb-typed"
@@ -14,6 +17,7 @@ rtdb-rs = "0.3.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }
