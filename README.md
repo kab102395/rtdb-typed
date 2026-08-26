@@ -12,7 +12,7 @@ Typed Serde data layer for Firebase Realtime Database, built on [`rtdb-rs`](http
 - Add typed query and streaming adapters without duplicating the underlying HTTP/SSE implementation.
 - Keep tests local and deterministic by default; no production Firebase database is required.
 
-## Planned API
+## API
 
 The initial `0.1.x` line will focus on a narrow typed wrapper:
 
@@ -21,8 +21,9 @@ The initial `0.1.x` line will focus on a narrow typed wrapper:
 - `TypedClient::patch<T>()`
 - `TypedClient::post<T>()`
 - `TypedClient::delete()`
-- typed query results
-- typed SSE events
+- `TypedClient::get_collection<T>()`
+- `TypedClient::query<T>().send()` for typed query results
+- `TypedClient::query<T>().stream()` for typed SSE events
 
 ## Testing strategy
 
@@ -42,7 +43,7 @@ The emulator remains an optional test layer; normal development should not requi
 
 ## Development roadmap
 
-### Phase 1 — foundation
+### Phase 1 — foundation (implemented)
 
 - crate metadata and dependency on `rtdb-rs`
 - `TypedClient`
@@ -50,6 +51,10 @@ The emulator remains an optional test layer; normal development should not requi
 - typed CRUD methods
 - serialization unit tests
 - local HTTP mock integration tests
+
+The local emulator smoke path is also implemented in `tests/emulator.rs` and
+is run by `scripts/test-emulator.sh`. It verifies the emulator plus typed CRUD
+without any Firebase account or production resource.
 
 ### Phase 2 — typed queries
 
@@ -73,7 +78,9 @@ The emulator remains an optional test layer; normal development should not requi
 
 ## Status
 
-Early development. The repository is being scaffolded for `0.1.0`.
+The `0.1.0` foundation is implemented. Query/stream adapters are available;
+the remaining compatibility work is teaching `rtdb-rs` to preserve the
+emulator `ns` query parameter for fully namespace-explicit emulator tests.
 
 ## License
 

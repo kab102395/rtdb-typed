@@ -1,6 +1,7 @@
 use rtdb_rs::RtdbClient;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
+use std::marker::PhantomData;
 
 use crate::TypedError;
 
@@ -11,6 +12,110 @@ use crate::TypedError;
 /// responsible for converting between Firebase JSON and application types.
 pub struct TypedClient {
     inner: RtdbClient,
+}
+
+/// A typed result from a Firebase realtime stream.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypedEvent<T> {
+    Put { path: String, data: T },
+    Patch { path: String, data: T },
+    KeepAlive,
+    Cancel,
+}
+
+/// A typed wrapper around [`rtdb_rs::GetBuilder`].
+pub struct TypedQuery<'a, T> {
+    inner: rtdb_rs::GetBuilder<'a>,
+    marker: PhantomData<fn() -> T>,
+}
+
+impl<'a, T> TypedQuery<'a, T>
+where
+    T: DeserializeOwned + 'static,
+{
+    fn new(inner: rtdb_rs::GetBuilder<'a>) -> Self {
+        Self {
+            inner,
+            marker: PhantomData,
+        }
+    }
+
+    pub fn order_by_child(mut self, field: &str) -> Self {
+        self.inner = self.inner.order_by_child(field);
+        self
+    }
+
+    pub fn order_by_key(mut self) -> Self {
+        self.inner = self.inner.order_by_key();
+        self
+    }
+
+    pub fn order_by_value(mut self) -> Self {
+        self.inner = self.inner.order_by_value();
+        self
+    }
+
+    pub fn order_by(mut self, order: rtdb_rs::OrderBy) -> Self {
+        self.inner = self.inner.order_by(order);
+        self
+    }
+
+    pub fn limit_to_first(mut self, n: u32) -> Self {
+        self.inner = self.inner.limit_to_first(n);
+        self
+    }
+
+    pub fn limit_to_last(mut self, n: u32) -> Self {
+        self.inner = self.inner.limit_to_last(n);
+        self
+    }
+
+    pub fn start_at(mut self, value: rtdb_rs::FilterValue) -> Self {
+        self.inner = self.inner.start_at(value);
+        self
+    }
+
+    pub fn end_at(mut self, value: rtdb_rs::FilterValue) -> Self {
+        self.inner = self.inner.end_at(value);
+        self
+    }
+
+    pub fn equal_to(mut self, value: rtdb_rs::FilterValue) -> Self {
+        self.inner = self.inner.equal_to(value);
+        self
+    }
+
+    pub fn shallow(mut self) -> Self {
+        self.inner = self.inner.shallow();
+        self
+    }
+
+    pub async fn send(self) -> Result<T, TypedError> {
+        Ok(serde_json::from_value(self.inner.send().await?)?)
+    }
+
+    pub async fn stream(
+        self,
+    ) -> Result<impl futures_util::Stream<Item = Result<TypedEvent<T>, TypedError>>, TypedError>
+    {
+        let stream = self.inner.stream().await?;
+        Ok(futures_util::StreamExt::map(stream, |event| {
+            event
+                .map_err(TypedError::from)
+                .and_then(|event| match event {
+                    rtdb_rs::RtdbEvent::Put { path, data } => Ok(TypedEvent::Put {
+                        path,
+                        data: serde_json::from_value(data)?,
+                    }),
+                    rtdb_rs::RtdbEvent::Patch { path, data } => Ok(TypedEvent::Patch {
+                        path,
+                        data: serde_json::from_value(data)?,
+                    }),
+                    rtdb_rs::RtdbEvent::KeepAlive => Ok(TypedEvent::KeepAlive),
+                    rtdb_rs::RtdbEvent::Cancel => Ok(TypedEvent::Cancel),
+                })
+        }))
+    }
 }
 
 impl TypedClient {
@@ -28,6 +133,25 @@ impl TypedClient {
     /// exposed by `rtdb-typed`.
     pub fn inner(&self) -> &RtdbClient {
         &self.inner
+    }
+
+    /// Start a typed one-shot query or realtime stream.
+    pub fn query<T>(&self, path: &str) -> TypedQuery<'_, T>
+    where
+        T: DeserializeOwned + 'static,
+    {
+        TypedQuery::new(self.inner.query(path))
+    }
+
+    /// Read a Firebase object map as typed `(key, value)` entries.
+    pub async fn get_collection<T>(
+        &self,
+        path: &str,
+    ) -> Result<std::collections::HashMap<String, T>, TypedError>
+    where
+        T: DeserializeOwned,
+    {
+        self.get(path).await
     }
 
     /// Read and deserialize a value.

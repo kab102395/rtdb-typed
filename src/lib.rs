@@ -8,7 +8,7 @@
 mod client;
 mod error;
 
-pub use client::TypedClient;
+pub use client::{TypedClient, TypedEvent, TypedQuery};
 pub use error::TypedError;
 
 pub use rtdb_rs;
