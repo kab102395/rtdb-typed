@@ -109,7 +109,7 @@ async fn run_stream_profile(stream_count: u32, mutations_per_stream: u32) -> Res
                         .await
                         .map_err(|error| error.to_string())?;
                     match next_event(&mut stream).await? {
-                        TypedEvent::Patch { patch, .. } => {
+                        TypedEvent::Patch { data: patch, .. } => {
                             assert_eq!(
                                 patch
                                     .deserialize_field::<u32>("revision")
