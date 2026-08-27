@@ -29,7 +29,7 @@ pub enum TypedEvent<T> {
     /// A partial Firebase update.
     Patch {
         path: String,
-        patch: TypedPatch,
+        data: TypedPatch,
     },
     KeepAlive,
     Cancel,
@@ -56,6 +56,11 @@ impl TypedPatch {
     /// Return the original patch JSON object.
     pub fn as_value(&self) -> &Value {
         &self.0
+    }
+
+    /// Return the original patch as a JSON object.
+    pub fn as_object(&self) -> Option<&serde_json::Map<String, Value>> {
+        self.0.as_object()
     }
 
     /// Return whether the patch changes `field`.
@@ -450,7 +455,7 @@ where
         }),
         rtdb_rs::RtdbEvent::Patch { path, data } => Ok(TypedEvent::Patch {
             path,
-            patch: TypedPatch::from_value(data)?,
+            data: TypedPatch::from_value(data)?,
         }),
         rtdb_rs::RtdbEvent::KeepAlive => Ok(TypedEvent::KeepAlive),
         rtdb_rs::RtdbEvent::Cancel => Ok(TypedEvent::Cancel),
@@ -623,7 +628,7 @@ mod tests {
             data: json!({"profile": {"score": 100}, "score": 100}),
         })
         .unwrap();
-        let TypedEvent::Patch { patch, .. } = patch else {
+        let TypedEvent::Patch { data: patch, .. } = patch else {
             panic!("expected patch")
         };
         assert!(patch.contains_key("profile"));
