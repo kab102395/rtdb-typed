@@ -301,7 +301,7 @@ async fn sse_put_patch_keepalive_and_cancel_are_projected_correctly() {
     ));
     let patch = stream.next().await.unwrap().unwrap();
     assert!(
-        matches!(patch, TypedEvent::Patch { patch, .. } if patch.as_value() == &json!({"score": 100}))
+        matches!(patch, TypedEvent::Patch { data: patch, .. } if patch.as_value() == &json!({"score": 100}))
     );
     assert!(matches!(
         stream.next().await.unwrap().unwrap(),
@@ -368,7 +368,7 @@ async fn sse_preserves_events_across_chunk_boundaries_and_crlf() {
         }
     ));
     assert!(
-        matches!(stream.next().await.unwrap().unwrap(), TypedEvent::Patch { patch, .. } if patch.as_value() == &json!({"score": 100}))
+        matches!(stream.next().await.unwrap().unwrap(), TypedEvent::Patch { data: patch, .. } if patch.as_value() == &json!({"score": 100}))
     );
     assert!(matches!(
         stream.next().await.unwrap().unwrap(),
