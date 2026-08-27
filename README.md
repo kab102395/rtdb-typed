@@ -1,20 +1,54 @@
 # rtdb-typed
 
-Typed Serde data layer for Firebase Realtime Database, built on [`rtdb-rs`](https://crates.io/crates/rtdb-rs).
+Typed Serde data access for Firebase Realtime Database, built on [`rtdb-rs`](https://github.com/kab102395/rtdb-rs).
 
-`rtdb-typed` is intended to keep Firebase transport concerns in `rtdb-rs` while adding a small, strongly typed API for application models.
+`rtdb-typed` keeps Firebase transport in `rtdb-rs` while giving applications a strongly typed layer for models, collections, queries, partial patches, and realtime events. It is intentionally not an ORM and does not own authentication or synchronized application state.
 
-## Goals
+## RTDB Rust ecosystem
 
-- Deserialize Firebase RTDB JSON directly into `serde::Deserialize` types.
-- Serialize Rust values through `serde::Serialize` for writes.
-- Preserve the path/query semantics of `rtdb-rs` instead of inventing an ORM.
-- Add typed query and streaming adapters without duplicating the underlying HTTP/SSE implementation.
-- Keep tests local and deterministic by default; no production Firebase database is required.
+```text
+application
+   |
+   +-- rtdb-sync
+   |     synchronized state, durability, offline queue/replay
+   |
+   +-- rtdb-typed
+   |     Serde models, typed CRUD, collections, queries, realtime events
+   |
+   +-- rtdb-admin
+   |     service-account auth and token lifecycle
+   |
+   `-- rtdb-rs
+         Firebase REST + query + SSE transport
+                  |
+                  v
+          Firebase Realtime Database
+```
 
-## API
+| Crate | Responsibility |
+| --- | --- |
+| [`rtdb-rs`](https://github.com/kab102395/rtdb-rs) | Raw Firebase REST/query/SSE transport |
+| [`rtdb-typed`](https://github.com/kab102395/rtdb-typed) | Typed Serde CRUD, collections, queries, patches, and realtime events |
+| [`rtdb-admin`](https://github.com/kab102395/rtdb-admin) | Service-account credentials and OAuth token lifecycle |
+| [`rtdb-sync`](https://github.com/kab102395/rtdb-sync) | Synchronized application state, local writes, durability, offline replay, reconciliation |
 
-The initial `0.1.x` line will focus on a narrow typed wrapper:
+`rtdb-typed` can be used directly for applications that want typed Firebase access without maintained local synchronization state. `rtdb-sync` builds on this layer for long-lived synchronized state.
+
+## Current release line
+
+The current development package is `0.3.0`.
+
+Its realtime model deliberately distinguishes complete Firebase values from partial updates:
+
+- `TypedEvent::Put` carries `Option<T>`; `None` represents Firebase `null`/deletion.
+- `TypedEvent::Patch` carries `TypedPatch`, preserving only fields actually changed by Firebase.
+- `KeepAlive` and `Cancel` remain visible to callers.
+
+This replaces the older provisional shape that treated a partial Firebase patch as if it were a complete `T`.
+
+## Core API
+
+The typed client supports:
 
 - `TypedClient::get<T>()`
 - `TypedClient::put<T>()`
@@ -23,92 +57,133 @@ The initial `0.1.x` line will focus on a narrow typed wrapper:
 - `TypedClient::delete()`
 - `TypedClient::get_collection<T>()`
 - `TypedClient::get_optional_collection<T>()`
-- `TypedClient::query<T>().send()` for typed query results
-- `TypedClient::query<T>().send_optional()` for nullable query results
-- `TypedClient::query<T>().send_collection()` for typed Firebase object maps
-- `TypedClient::query<T>().stream()` for typed SSE events
+- `TypedClient::query<T>().send()`
+- `TypedClient::query<T>().send_optional()`
+- `TypedClient::query<T>().send_collection()`
+- `TypedClient::stream()`
+- `TypedClient::query(...).stream()`
 
-Collection methods return `FirebaseCollection<T>`, which provides typed
-`len`, `is_empty`, `get`, `contains_key`, `keys`, `values`, `iter`, and
-`into_inner` operations. `get_collection` and `send_collection` convert
-Firebase `null` to an empty collection; optional variants return `None` for
-`null`. Push writes return `PushResult { key, path }`.
+The layer delegates HTTP, URL construction, Firebase query semantics, namespaces, authentication parameters, and SSE transport to `rtdb-rs`.
 
-`TypedEvent::Put` contains `Some(T)` for a complete value and `None` for a
-Firebase deletion/null. `TypedEvent::Patch` contains `TypedPatch`, preserving
-only the changed fields; it is never deserialized as a complete model. A patch
-can inspect a field with `deserialize_field` or apply shallow changes to an
-existing model with `apply_to`. Use `TypedClient::stream` for a direct stream,
-or `TypedClient::query(...).stream()` for filtered streams; `Cancel` is
-preserved and terminates the typed stream after delivery.
+## Typed models
 
-### 0.3 migration note
+Any compatible Serde model can be used directly.
 
-The provisional 0.1/0.2 realtime shape is replaced in 0.3: `Put` now carries
-`Option<T>` (`None` means Firebase `null`), and `Patch` now carries
-`TypedPatch` rather than pretending changed fields form a complete `T`.
-Consumers should explicitly apply patches to their current model and handle
-deletion before continuing synchronization.
+```rust
+use serde::{Deserialize, Serialize};
 
-## Testing strategy
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct User {
+    name: String,
+    score: u64,
+}
+```
 
-### 1. Unit tests — no network
+The typed layer serializes writes through `serde::Serialize` and deserializes reads through `serde::Deserialize`.
 
-Pure serialization/deserialization and error-conversion tests run with `cargo test` and do not start any server.
+## Collections
 
-### 2. Local mock HTTP tests — no Firebase account
+Firebase object maps are represented as `FirebaseCollection<T>`.
 
-Integration tests will use a local mock HTTP server to emulate Firebase REST responses. This validates the `rtdb-typed -> rtdb-rs -> HTTP` boundary without contacting Firebase or consuming billable database operations.
+Collection helpers include typed:
 
-### 3. Firebase Realtime Database Emulator — optional end-to-end tests
+- `len`
+- `is_empty`
+- `get`
+- `contains_key`
+- `keys`
+- `values`
+- `iter`
+- `into_inner`
 
-Firebase's Local Emulator Suite includes a Realtime Database emulator. It can run entirely on localhost and is appropriate for integration/CI testing without touching production data or incurring production database usage. The preferred test project will use a `demo-` project ID so accidental fall-through to live Firebase resources is impossible.
+`get_collection` and query `send_collection` convert Firebase `null` into an empty collection. Optional collection variants preserve `null` as `None`.
 
-The emulator remains an optional test layer; normal development should not require it.
+Push writes return a typed `PushResult { key, path }`.
 
-## Development roadmap
+## Typed queries
 
-### Phase 1 — foundation (implemented)
+Typed query builders preserve the underlying Firebase query rules from `rtdb-rs` while deserializing the response into application types.
 
-- crate metadata and dependency on `rtdb-rs`
-- `TypedClient`
-- typed error model
-- typed CRUD methods
-- serialization unit tests
-- local HTTP mock integration tests
+This allows applications to use Firebase ordering/filtering without manually decoding `serde_json::Value` at every call site.
 
-The local emulator smoke path is also implemented in `tests/emulator.rs` and
-is run by `scripts/test-emulator.sh`. It verifies the emulator plus typed CRUD
-without any Firebase account or production resource.
+## Typed realtime events
 
-### Phase 2 — typed queries and collections (implemented)
+Direct and filtered SSE streams are converted from `rtdb-rs::RtdbEvent` into typed events.
 
-- typed wrapper around `rtdb_rs::GetBuilder`
-- `send<T>()`
-- `FirebaseCollection<T>` helpers for Firebase key/value maps
-- typed optional and collection query results
-- query error tests
+`Put` is a complete replacement at the relevant Firebase path:
 
-### Phase 3 — first-class typed realtime streams (implemented)
+```text
+TypedEvent::Put { data: Some(model), ... }
+```
 
-- map `RtdbEvent::Put` and `RtdbEvent::Patch` JSON payloads into typed events
-- represent deletion as `TypedEvent::Put { data: None }`
-- inspect/apply partial updates with `TypedPatch`
-- preserve `KeepAlive` and `Cancel`
-- test SSE parsing through a local mock server
+Deletion/null is represented explicitly:
 
-### Phase 4 — emulator verification and CI
+```text
+TypedEvent::Put { data: None, ... }
+```
 
-- Firebase Emulator configuration
-- end-to-end CRUD/query/SSE tests against localhost
-- GitHub Actions jobs for unit/mock tests on every push
-- optional emulator job for release validation
+A Firebase patch is not assumed to contain a complete model:
 
-## Status
+```text
+TypedEvent::Patch { data: TypedPatch, ... }
+```
 
-The `0.2.0` typed collection/query API and local emulator stress suite are
-implemented. Query/stream adapters are available; the independent upstream
-`rtdb-rs` namespace release remains tracked in the first-class companion plan.
+`TypedPatch` can deserialize individual changed fields or apply supported shallow changes to an existing typed model. This distinction is important for synchronization layers because partial Firebase updates must not silently erase fields that were not present in the patch.
+
+## Relationship to rtdb-sync
+
+[`rtdb-sync`](https://github.com/kab102395/rtdb-sync) uses typed model/event conversion while owning the higher-level state-management concerns:
+
+- hydration
+- current local snapshot
+- watch/subscriber notifications
+- reconnect policy
+- local PUT/PATCH writes
+- acknowledgement and echo handling
+- conflict policy
+- durable snapshots
+- offline mutation journals
+- process restart recovery
+- replay/reconciliation after reconnect
+
+Those behaviors intentionally remain outside `rtdb-typed`.
+
+## Relationship to rtdb-admin
+
+[`rtdb-admin`](https://github.com/kab102395/rtdb-admin) owns service-account loading, JWT/OAuth exchange, token expiry, refresh, and authenticated `rtdb-rs` client lifecycle. `rtdb-typed` consumes the resulting transport client rather than storing service-account credentials itself.
+
+## Testing
+
+The project uses several validation layers:
+
+1. serialization/deserialization and conversion unit tests with no network
+2. localhost mock HTTP/SSE tests for deterministic transport-boundary behavior
+3. optional official Firebase Realtime Database Emulator tests for real local Firebase behavior
+4. ecosystem integration through `rtdb-sync`, where typed operations run concurrently with raw transport, admin-authenticated clients, synchronized local writes, subscribers, offline replay, and long-duration stress profiles
+
+The emulator coverage includes typed CRUD, queries, realtime SSE behavior, filtered-child behavior, and fan-out scenarios. No production Firebase account is required for the normal local suite.
+
+## Development status
+
+The major typed layers are implemented:
+
+- typed CRUD
+- collections
+- optional/null collection semantics
+- typed queries
+- typed direct and filtered realtime streams
+- explicit deletion handling
+- `TypedPatch` partial-update semantics
+- local mock validation
+- official emulator validation
+
+The package remains pre-1.0, so public API changes are still possible.
+
+Before coordinated publication, dependency metadata is being aligned with the matching published `rtdb-rs` release and local workspace patches are removed for the final crates.io graph.
+
+## Scope
+
+`rtdb-typed` is a typed data layer, not an ORM, authentication manager, synchronization engine, or offline database. Those responsibilities are intentionally separated into the other ecosystem crates.
 
 ## License
 
